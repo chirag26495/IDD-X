@@ -1,9 +1,10 @@
 # IDD-X
 
 This repository is the official implementation of the approach proposed in [IDD-X: A Multi-View Dataset for Ego-relative Important Object Localization and Explanation in Dense and Unstructured Traffic](http://arxiv.org/abs/2404.08561). 
-[Project Page](https://idd-x.github.io/)
 
-<!-- >📋  Optional: include a graphic explaining your approach/main result, bibtex entry, link to demos, blog posts and tutorials
+Please visit [Project Page](https://idd-x.github.io/) for details.
+
+<!-- >📋  Optional: include a graphic explaining approach
  -->
 
 ## Requirements
@@ -45,7 +46,7 @@ Refer ./dataset_README.txt for details about the dataset and its structure.
 
 You can download the models trained on IDD-X here:
 
-- [OneDriveLink](https://iiitaphyd-my.sharepoint.com/:f:/g/personal/chirag_parikh_research_iiit_ac_in/Evottwy5Q39JpDXBu7PvbngBOBPG5Xn4uC2FB3tffLJ7dA?e=hkXYJw) contains models for the tasks:
+[OneDriveLink](https://iiitaphyd-my.sharepoint.com/:f:/g/personal/chirag_parikh_research_iiit_ac_in/Evottwy5Q39JpDXBu7PvbngBOBPG5Xn4uC2FB3tffLJ7dA?e=hkXYJw) contains models for the tasks:
 1. Important Object Track Identification
 2. Ego-Vehicle's Behavior Recognition
 3. Important Object Track Explanation
@@ -60,7 +61,7 @@ mkdir models
  
 ## Data Pre-processing, Training, and Evaluation
 
-Run the python/bash scripts in the specified order (#) in Step-#___.py/.sh
+Run the python/bash scripts in the specified order (# --> Step-#___.py/.sh)
 
 The file paths for the pre-trained models (of a. ego-vehicle behavior recognition, b. IO eXplanation generator) specified in the scripts (Step13_train_IOeXplanationsGeneratorModel.py and Step14_evaluate_IOeXplanationsGeneratorModel.py) can be replaced with the best models obtained after running their respective training scripts.
 
@@ -93,9 +94,13 @@ If you find the code and dataset useful, please cite this paper (and refer the d
 ## References
 
 We thank the following github repositories for the open source code and models:
+
 **[MMAction2](https://github.com/open-mmlab/mmaction2)**
+
 **[IDD-Detection Model](https://github.com/IDD-Detection/Yolo-v4-Model)**
+
 **[SORT Tracker](https://github.com/abewley/sort)**
+
 **[Blurring Faces & License Plates in Dashcam videos](https://github.com/varungupta31/dashcam_anonymizer)**
 
 

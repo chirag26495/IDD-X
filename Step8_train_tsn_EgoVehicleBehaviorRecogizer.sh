@@ -1,0 +1,1 @@
+python3 mmaction2/tools/train.py tsn_config-activitynet-rgb_iddx_latest_wCorrectCropAug.py

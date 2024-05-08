@@ -1,0 +1,672 @@
+diff --git a/mmaction/apis/inference.py b/mmaction/apis/inference.py
+index f303d20e..36f2fa70 100644
+--- a/mmaction/apis/inference.py
++++ b/mmaction/apis/inference.py
+@@ -14,6 +14,8 @@ from mmcv.runner import load_checkpoint
+ from mmaction.core import OutputHook
+ from mmaction.datasets.pipelines import Compose
+ from mmaction.models import build_recognizer
++# from mmaction.utils import build_dp, default_device
++import copy
+ 
+ 
+ def init_recognizer(config, checkpoint=None, device='cuda:0', **kwargs):
+@@ -45,6 +47,8 @@ def init_recognizer(config, checkpoint=None, device='cuda:0', **kwargs):
+     config.model.backbone.pretrained = None
+     model = build_recognizer(config.model, test_cfg=config.get('test_cfg'))
+ 
++    # model = build_dp(model, default_device, default_args=dict(device_ids=config.gpu_ids))
++    
+     if checkpoint is not None:
+         load_checkpoint(model, checkpoint, map_location='cpu')
+     model.cfg = config
+@@ -53,7 +57,7 @@ def init_recognizer(config, checkpoint=None, device='cuda:0', **kwargs):
+     return model
+ 
+ 
+-def inference_recognizer(model, video, outputs=None, as_tensor=True, **kwargs):
++def inference_recognizer(model, video, outputs=None, as_tensor=True, dstype='train', **kwargs):
+     """Inference a video with the recognizer.
+ 
+     Args:
+@@ -107,7 +111,32 @@ def inference_recognizer(model, video, outputs=None, as_tensor=True, **kwargs):
+     device = next(model.parameters()).device  # model device
+     # build the data pipeline
+     test_pipeline = cfg.data.test.pipeline
++    
+     # Alter data pipelines & prepare inputs
++    
++    if(dstype!='train'):
++        ### setting test_mode=True, for validation set evaluation
++        for i in range(len(test_pipeline)):
++            if 'SampleFrames' in test_pipeline[i]['type']:
++                test_pipeline[i] = dict(type='SampleFrames',
++                                        clip_len=5,
++                                        frame_interval=1,
++                                        num_clips=8,
++                                        test_mode=True)
++            if 'Flip' in test_pipeline[i]['type']:
++                test_pipeline[i] = dict(type='Flip', flip_ratio=0.0)
++    else:
++        for i in range(len(test_pipeline)):
++            if 'SampleFrames' in test_pipeline[i]['type']:
++                test_pipeline[i] = dict(type='SampleFrames',
++                                        clip_len=5,
++                                        frame_interval=1,
++                                        num_clips=8,
++                                        test_mode=False)
++                                        # test_mode=True)  ## only for BRNN model set this flag True
++            if 'Flip' in test_pipeline[i]['type']:
++                test_pipeline[i] = dict(type='Flip', flip_ratio=0.5)
++                
+     if input_flag == 'dict':
+         data = video
+     if input_flag == 'array':
+@@ -171,6 +200,8 @@ def inference_recognizer(model, video, outputs=None, as_tensor=True, **kwargs):
+     test_pipeline = Compose(test_pipeline)
+     data = test_pipeline(data)
+     data = collate([data], samples_per_gpu=1)
++    img_metas = copy.deepcopy(data['img_metas'])
++    data.pop('img_metas')
+ 
+     if next(model.parameters()).is_cuda:
+         # scatter to specified GPU
+@@ -188,5 +219,5 @@ def inference_recognizer(model, video, outputs=None, as_tensor=True, **kwargs):
+ 
+     top5_label = score_sorted[:5]
+     if outputs:
+-        return top5_label, returned_features
+-    return top5_label
++        return top5_label, returned_features, img_metas
++    return top5_label, img_metas
+\ No newline at end of file
+diff --git a/mmaction/apis/train.py b/mmaction/apis/train.py
+index b0c7e06a..affc531c 100644
+--- a/mmaction/apis/train.py
++++ b/mmaction/apis/train.py
+@@ -13,7 +13,7 @@ from mmcv.runner.hooks import Fp16OptimizerHook
+ 
+ from ..core import (DistEvalHook, EvalHook, OmniSourceDistSamplerSeedHook,
+                     OmniSourceRunner)
+-from ..datasets import build_dataloader, build_dataset
++from ..datasets import build_dataloader, build_val_dataloader, build_dataset
+ from ..utils import (PreciseBNHook, build_ddp, build_dp, default_device,
+                      get_root_logger)
+ from .test import multi_gpu_test
+diff --git a/mmaction/datasets/__init__.py b/mmaction/datasets/__init__.py
+index 2c2bc896..c389a5de 100644
+--- a/mmaction/datasets/__init__.py
++++ b/mmaction/datasets/__init__.py
+@@ -7,7 +7,7 @@ from .ava_dataset import AVADataset
+ from .base import BaseDataset
+ from .blending_utils import (BaseMiniBatchBlending, CutmixBlending,
+                              MixupBlending)
+-from .builder import (BLENDINGS, DATASETS, PIPELINES, build_dataloader,
++from .builder import (BLENDINGS, DATASETS, PIPELINES, build_dataloader, build_val_dataloader,
+                       build_dataset)
+ from .dataset_wrappers import ConcatDataset, RepeatDataset
+ from .hvu_dataset import HVUDataset
+@@ -19,10 +19,10 @@ from .ssn_dataset import SSNDataset
+ from .video_dataset import VideoDataset
+ 
+ __all__ = [
+-    'VideoDataset', 'build_dataloader', 'build_dataset', 'RepeatDataset',
++    'VideoDataset', 'build_dataloader', 'build_val_dataloader', 'build_dataset', 'RepeatDataset',
+     'RawframeDataset', 'BaseDataset', 'ActivityNetDataset', 'SSNDataset',
+     'HVUDataset', 'AudioDataset', 'AudioFeatureDataset', 'ImageDataset',
+     'RawVideoDataset', 'AVADataset', 'AudioVisualDataset',
+     'BaseMiniBatchBlending', 'CutmixBlending', 'MixupBlending', 'DATASETS',
+     'PIPELINES', 'BLENDINGS', 'PoseDataset', 'ConcatDataset'
+-]
++]
+\ No newline at end of file
+diff --git a/mmaction/datasets/builder.py b/mmaction/datasets/builder.py
+index 8a516af5..c713d145 100644
+--- a/mmaction/datasets/builder.py
++++ b/mmaction/datasets/builder.py
+@@ -2,7 +2,7 @@
+ import platform
+ import random
+ from functools import partial
+-
++import copy
+ import numpy as np
+ import torch
+ from mmcv.parallel import collate
+@@ -25,6 +25,62 @@ DATASETS = Registry('dataset')
+ PIPELINES = Registry('pipeline')
+ BLENDINGS = Registry('blending')
+ 
++class ClassBalancedBatchSampler(torch.utils.data.sampler.Sampler):
++    def __init__(self, dataset, batch_size, num_samples=None):
++        self.batch_size = batch_size
++        self.S = dict()
++        self.c_max = 0
++        for idx in range(0, len(dataset)):
++            # print(dataset[idx]['label'])
++            if(torch.is_tensor(dataset[idx]['label'])):
++                label = dataset[idx]['label'].item()
++            else:
++                label = dataset[idx]['label']
++            if label not in self.S:
++                self.S[label] = list()
++            self.S[label].append(idx)
++            if(len(self.S[label]) > self.c_max):
++                self.c_max = len(self.S[label])
++                
++        self.N = len(self.S)
++        if(num_samples is not None):
++            self.c_max = num_samples//self.N
++        self.num_batches = self.N*(self.c_max//self.batch_size)
++        self.Sbkp = copy.deepcopy(self.S)
++    
++    def __iter__(self):
++        self.S = copy.deepcopy(self.Sbkp)
++        ### oversample with shuffling
++        for k in self.S:
++            if(len(self.S[k]) < self.c_max):
++                temp = []
++                for ai in range(0, self.c_max//len(self.S[k])):
++                    random.shuffle(self.S[k])
++                    temp = temp + self.S[k]
++                temp = temp + random.sample(self.S[k], self.c_max % len(self.S[k]))
++                self.S[k] = temp
++            else:
++                self.S[k] = random.sample(self.S[k], self.c_max)
++
++        ### preparing batches
++        B = []
++        for i in range(self.num_batches):
++            Bi = []
++            for k in self.S:
++                start_idx = int(i*self.batch_size//self.N)
++                end_idx = int((i+1)*self.batch_size//self.N)
++                Bi += self.S[k][start_idx:end_idx]
++
++            random.shuffle(Bi)
++            # print(Bi)
++            # yield Bi
++            B.append(Bi)
++
++        random.shuffle(B)
++        return iter(B)
++    
++    def __len__(self):
++        return self.num_batches
+ 
+ def build_dataset(cfg, default_args=None):
+     """Build a dataset from config dict.
+@@ -132,6 +188,138 @@ def build_dataloader(dataset,
+             raise NotImplementedError(
+                 'Short cycle using non-dist is not supported')
+ 
++        #### WeightedRandomSampler fn. can be used here for Under/Over-sampling
++        sampler = None
++        batch_size = num_gpus * videos_per_gpu
++        num_workers = num_gpus * workers_per_gpu
++
++    init_fn = partial(
++        worker_init_fn, num_workers=num_workers, rank=rank,
++        seed=seed) if seed is not None else None
++
++    if digit_version(torch.__version__) >= digit_version('1.8.0'):
++        kwargs['persistent_workers'] = persistent_workers
++
++    if(sample_by_class):
++        data_loader = DataLoader(
++            dataset,
++            # batch_size=batch_size,
++            # sampler=sampler,
++            batch_sampler = ClassBalancedBatchSampler(dataset, batch_size, len(dataset)),
++            num_workers=num_workers,
++            collate_fn=partial(collate, samples_per_gpu=videos_per_gpu),
++            pin_memory=pin_memory,
++            # shuffle=shuffle,
++            worker_init_fn=init_fn,
++            # drop_last=drop_last,
++            **kwargs)
++    else:
++        data_loader = DataLoader(
++            dataset,
++            batch_size=batch_size,
++            sampler=sampler,
++            num_workers=num_workers,
++            collate_fn=partial(collate, samples_per_gpu=videos_per_gpu),
++            pin_memory=pin_memory,
++            shuffle=shuffle,
++            worker_init_fn=init_fn,
++            drop_last=drop_last,
++            **kwargs)
++
++    return data_loader
++
++def build_val_dataloader(dataset,
++                     videos_per_gpu,
++                     workers_per_gpu,
++                     num_gpus=1,
++                     dist=True,
++                     shuffle=True,
++                     seed=None,
++                     drop_last=False,
++                     pin_memory=True,
++                     persistent_workers=False,
++                     **kwargs):
++    """Build PyTorch DataLoader.
++
++    In distributed training, each GPU/process has a dataloader.
++    In non-distributed training, there is only one dataloader for all GPUs.
++
++    Args:
++        dataset (:obj:`Dataset`): A PyTorch dataset.
++        videos_per_gpu (int): Number of videos on each GPU, i.e.,
++            batch size of each GPU.
++        workers_per_gpu (int): How many subprocesses to use for data
++            loading for each GPU.
++        num_gpus (int): Number of GPUs. Only used in non-distributed
++            training. Default: 1.
++        dist (bool): Distributed training/test or not. Default: True.
++        shuffle (bool): Whether to shuffle the data at every epoch.
++            Default: True.
++        seed (int | None): Seed to be used. Default: None.
++        drop_last (bool): Whether to drop the last incomplete batch in epoch.
++            Default: False
++        pin_memory (bool): Whether to use pin_memory in DataLoader.
++            Default: True
++        persistent_workers (bool): If True, the data loader will not shutdown
++            the worker processes after a dataset has been consumed once.
++            This allows to maintain the workers Dataset instances alive.
++            The argument also has effect in PyTorch>=1.8.0.
++            Default: False
++        kwargs (dict, optional): Any keyword argument to be used to initialize
++            DataLoader.
++
++    Returns:
++        DataLoader: A PyTorch dataloader.
++    """
++    rank, world_size = get_dist_info()
++    sample_by_class = getattr(dataset, 'sample_by_class', False)
++
++    short_cycle = kwargs.pop('short_cycle', False)
++    multigrid_cfg = kwargs.pop('multigrid_cfg', None)
++    crop_size = kwargs.pop('crop_size', 224)
++
++    if dist:
++        if sample_by_class:
++            dynamic_length = getattr(dataset, 'dynamic_length', True)
++            sampler = ClassSpecificDistributedSampler(
++                dataset,
++                world_size,
++                rank,
++                dynamic_length=dynamic_length,
++                shuffle=shuffle,
++                seed=seed)
++        else:
++            sampler = DistributedSampler(
++                dataset, world_size, rank, shuffle=shuffle, seed=seed)
++        shuffle = False
++        batch_size = videos_per_gpu
++        num_workers = workers_per_gpu
++
++        if short_cycle:
++            batch_sampler = ShortCycleSampler(sampler, batch_size,
++                                              multigrid_cfg, crop_size)
++            init_fn = partial(
++                worker_init_fn, num_workers=num_workers, rank=rank,
++                seed=seed) if seed is not None else None
++
++            if digit_version(torch.__version__) >= digit_version('1.8.0'):
++                kwargs['persistent_workers'] = persistent_workers
++
++            data_loader = DataLoader(
++                dataset,
++                batch_sampler=batch_sampler,
++                num_workers=num_workers,
++                pin_memory=pin_memory,
++                worker_init_fn=init_fn,
++                **kwargs)
++            return data_loader
++
++    else:
++        if short_cycle:
++            raise NotImplementedError(
++                'Short cycle using non-dist is not supported')
++
++        #### WeightedRandomSampler fn. can be used here for Under/Over-sampling
+         sampler = None
+         batch_size = num_gpus * videos_per_gpu
+         num_workers = num_gpus * workers_per_gpu
+@@ -143,6 +331,19 @@ def build_dataloader(dataset,
+     if digit_version(torch.__version__) >= digit_version('1.8.0'):
+         kwargs['persistent_workers'] = persistent_workers
+ 
++#     data_loader = DataLoader(
++#         dataset,
++#         # batch_size=batch_size,
++#         # sampler=sampler,
++#         batch_sampler = ClassBalancedBatchSampler(dataset, batch_size, len(dataset)),
++#         num_workers=num_workers,
++#         collate_fn=partial(collate, samples_per_gpu=videos_per_gpu),
++#         pin_memory=pin_memory,
++#         # shuffle=shuffle,
++#         worker_init_fn=init_fn,
++#         # drop_last=drop_last,
++#         **kwargs)
++    
+     data_loader = DataLoader(
+         dataset,
+         batch_size=batch_size,
+@@ -165,4 +366,4 @@ def worker_init_fn(worker_id, num_workers, rank, seed):
+     worker_seed = num_workers * rank + worker_id + seed
+     np.random.seed(worker_seed)
+     random.seed(worker_seed)
+-    torch.manual_seed(worker_seed)
++    torch.manual_seed(worker_seed)
+\ No newline at end of file
+diff --git a/mmaction/datasets/pipelines/__init__.py b/mmaction/datasets/pipelines/__init__.py
+index 1905bf98..f34694b3 100644
+--- a/mmaction/datasets/pipelines/__init__.py
++++ b/mmaction/datasets/pipelines/__init__.py
+@@ -2,7 +2,7 @@
+ from .augmentations import (AudioAmplify, CenterCrop, ColorJitter, Flip, Fuse,
+                             Imgaug, MelSpectrogram, MultiScaleCrop, Normalize,
+                             PytorchVideoTrans, RandomCrop, RandomRescale,
+-                            RandomResizedCrop, Resize, TenCrop, ThreeCrop,
++                            RandomResizedCrop, RandomResizedCropWidthBounds, Resize, TenCrop, ThreeCrop,
+                             TorchvisionTrans)
+ from .compose import Compose
+ from .formatting import (Collect, FormatAudioShape, FormatGCNInput,
+@@ -23,7 +23,7 @@ from .pose_loading import (GeneratePoseTarget, LoadKineticsPose,
+ 
+ __all__ = [
+     'SampleFrames', 'PyAVDecode', 'DecordDecode', 'DenseSampleFrames',
+-    'OpenCVDecode', 'MultiScaleCrop', 'RandomResizedCrop', 'RandomCrop',
++    'OpenCVDecode', 'MultiScaleCrop', 'RandomResizedCrop', 'RandomResizedCropWidthBounds', 'RandomCrop',
+     'Resize', 'Flip', 'Fuse', 'Normalize', 'ThreeCrop', 'CenterCrop',
+     'TenCrop', 'ImageToTensor', 'Transpose', 'Collect', 'FormatShape',
+     'Compose', 'ToTensor', 'ToDataContainer', 'GenerateLocalizationLabels',
+@@ -38,4 +38,4 @@ __all__ = [
+     'PoseDecode', 'LoadKineticsPose', 'GeneratePoseTarget', 'PIMSInit',
+     'PIMSDecode', 'TorchvisionTrans', 'PytorchVideoTrans', 'PoseNormalize',
+     'FormatGCNInput', 'PaddingWithLoop', 'ArrayDecode', 'JointToBone'
+-]
++]
+\ No newline at end of file
+diff --git a/mmaction/datasets/pipelines/augmentations.py b/mmaction/datasets/pipelines/augmentations.py
+index 9bd5d266..2f498340 100644
+--- a/mmaction/datasets/pipelines/augmentations.py
++++ b/mmaction/datasets/pipelines/augmentations.py
+@@ -625,6 +625,7 @@ class RandomCrop:
+                                    'with lazy == True')
+ 
+         img_h, img_w = results['img_shape']
++        # print(img_h, img_w, self.size)
+         assert self.size <= img_h and self.size <= img_w
+ 
+         y_offset = 0
+@@ -857,6 +858,170 @@ class RandomResizedCrop(RandomCrop):
+         return repr_str
+ 
+ 
++@PIPELINES.register_module()
++class RandomResizedCropWidthBounds(RandomCrop):
++    """Random crop that specifics the area and height-weight ratio range.
++
++    Required keys in results are "img_shape", "crop_bbox", "imgs" (optional),
++    "keypoint" (optional), added or modified keys are "imgs", "keypoint",
++    "crop_bbox" and "lazy"; Required keys in "lazy" are "flip", "crop_bbox",
++    added or modified key is "crop_bbox".
++
++    Args:
++        area_range (Tuple[float]): The candidate area scales range of
++            output cropped images. Default: (0.08, 1.0).
++        aspect_ratio_range (Tuple[float]): The candidate aspect ratio range of
++            output cropped images. Default: (3 / 4, 4 / 3).
++        lazy (bool): Determine whether to apply lazy operation. Default: False.
++    """
++
++    def __init__(self,
++                 area_range=(0.08, 1.0),
++                 aspect_ratio_range=(3 / 4, 4 / 3),
++                 min_width_ratio = 0.844,
++                 lazy=False):
++        self.area_range = area_range
++        self.aspect_ratio_range = aspect_ratio_range
++        self.min_width_ratio = min_width_ratio
++        self.lazy = lazy
++        if not mmcv.is_tuple_of(self.area_range, float):
++            raise TypeError(f'Area_range must be a tuple of float, '
++                            f'but got {type(area_range)}')
++        if not mmcv.is_tuple_of(self.aspect_ratio_range, float):
++            raise TypeError(f'Aspect_ratio_range must be a tuple of float, '
++                            f'but got {type(aspect_ratio_range)}')
++
++    @staticmethod
++    def get_crop_bbox(img_shape,
++                      area_range,
++                      aspect_ratio_range,
++                      min_width_ratio,
++                      max_attempts=10):
++        """Get a crop bbox given the area range and aspect ratio range.
++
++        Args:
++            img_shape (Tuple[int]): Image shape
++            area_range (Tuple[float]): The candidate area scales range of
++                output cropped images. Default: (0.08, 1.0).
++            aspect_ratio_range (Tuple[float]): The candidate aspect
++                ratio range of output cropped images. Default: (3 / 4, 4 / 3).
++                max_attempts (int): The maximum of attempts. Default: 10.
++            max_attempts (int): Max attempts times to generate random candidate
++                bounding box. If it doesn't qualified one, the center bounding
++                box will be used.
++        Returns:
++            (list[int]) A random crop bbox within the area range and aspect
++            ratio range.
++        """
++        assert 0 < area_range[0] <= area_range[1] <= 1
++        assert 0 < aspect_ratio_range[0] <= aspect_ratio_range[1]
++
++        img_h, img_w = img_shape
++        area = img_h * img_w
++
++        min_ar, max_ar = aspect_ratio_range
++        aspect_ratios = np.exp(
++            np.random.uniform(
++                np.log(min_ar), np.log(max_ar), size=max_attempts))
++        target_areas = np.random.uniform(*area_range, size=max_attempts) * area
++        candidate_crop_w = np.round(np.sqrt(target_areas *
++                                            aspect_ratios)).astype(np.int32)
++        candidate_crop_h = np.round(np.sqrt(target_areas /
++                                            aspect_ratios)).astype(np.int32)
++
++        for i in range(max_attempts):
++            crop_w = candidate_crop_w[i]
++            crop_h = candidate_crop_h[i]
++            if crop_h <= img_h and crop_w <= img_w and crop_w >= img_w*min_width_ratio:
++                x_offset = random.randint(0, int((img_w - crop_w)/2))
++                # x_offset = random.randint(0, img_w - crop_w)
++                y_offset = random.randint(0, img_h - crop_h)
++                return x_offset, y_offset, x_offset + crop_w, y_offset + crop_h
++
++        # Fallback
++        crop_size = min(img_h, img_w)
++        x_offset = (img_w - crop_size) // 2
++        y_offset = (img_h - crop_size) // 2
++        return x_offset, y_offset, x_offset + crop_size, y_offset + crop_size
++
++    def __call__(self, results):
++        """Performs the RandomResizeCrop augmentation.
++
++        Args:
++            results (dict): The resulting dict to be modified and passed
++                to the next transform in pipeline.
++        """
++        _init_lazy_if_proper(results, self.lazy)
++        if 'keypoint' in results:
++            assert not self.lazy, ('Keypoint Augmentations are not compatible '
++                                   'with lazy == True')
++
++        img_h, img_w = results['img_shape']
++
++        left, top, right, bottom = self.get_crop_bbox(
++            (img_h, img_w), self.area_range, self.aspect_ratio_range, self.min_width_ratio)
++        new_h, new_w = bottom - top, right - left
++
++        if 'crop_quadruple' not in results:
++            results['crop_quadruple'] = np.array(
++                [0, 0, 1, 1],  # x, y, w, h
++                dtype=np.float32)
++
++        x_ratio, y_ratio = left / img_w, top / img_h
++        w_ratio, h_ratio = new_w / img_w, new_h / img_h
++
++        old_crop_quadruple = results['crop_quadruple']
++        old_x_ratio, old_y_ratio = old_crop_quadruple[0], old_crop_quadruple[1]
++        old_w_ratio, old_h_ratio = old_crop_quadruple[2], old_crop_quadruple[3]
++        new_crop_quadruple = [
++            old_x_ratio + x_ratio * old_w_ratio,
++            old_y_ratio + y_ratio * old_h_ratio, w_ratio * old_w_ratio,
++            h_ratio * old_h_ratio
++        ]
++        results['crop_quadruple'] = np.array(
++            new_crop_quadruple, dtype=np.float32)
++
++        crop_bbox = np.array([left, top, right, bottom])
++        results['crop_bbox'] = crop_bbox
++        results['img_shape'] = (new_h, new_w)
++
++        if not self.lazy:
++            if 'keypoint' in results:
++                results['keypoint'] = self._crop_kps(results['keypoint'],
++                                                     crop_bbox)
++            if 'imgs' in results:
++                results['imgs'] = self._crop_imgs(results['imgs'], crop_bbox)
++        else:
++            lazyop = results['lazy']
++            if lazyop['flip']:
++                raise NotImplementedError('Put Flip at last for now')
++
++            # record crop_bbox in lazyop dict to ensure only crop once in Fuse
++            lazy_left, lazy_top, lazy_right, lazy_bottom = lazyop['crop_bbox']
++            left = left * (lazy_right - lazy_left) / img_w
++            right = right * (lazy_right - lazy_left) / img_w
++            top = top * (lazy_bottom - lazy_top) / img_h
++            bottom = bottom * (lazy_bottom - lazy_top) / img_h
++            lazyop['crop_bbox'] = np.array([(lazy_left + left),
++                                            (lazy_top + top),
++                                            (lazy_left + right),
++                                            (lazy_top + bottom)],
++                                           dtype=np.float32)
++
++        if 'gt_bboxes' in results:
++            assert not self.lazy
++            results = self._all_box_crop(results, results['crop_bbox'])
++
++        return results
++
++    def __repr__(self):
++        repr_str = (f'{self.__class__.__name__}('
++                    f'area_range={self.area_range}, '
++                    f'aspect_ratio_range={self.aspect_ratio_range}, '
++                    f'lazy={self.lazy})')
++        return repr_str
++
++
+ @PIPELINES.register_module()
+ class MultiScaleCrop(RandomCrop):
+     """Crop images with a list of randomly selected scales.
+@@ -1121,6 +1286,7 @@ class Resize:
+         if 'scale_factor' not in results:
+             results['scale_factor'] = np.array([1, 1], dtype=np.float32)
+         img_h, img_w = results['img_shape']
++        # print(results['img_shape'])
+ 
+         if self.keep_ratio:
+             new_w, new_h = mmcv.rescale_size((img_w, img_h), self.scale)
+@@ -1156,6 +1322,7 @@ class Resize:
+                 results['proposals'] = self._box_resize(
+                     results['proposals'], self.scale_factor)
+ 
++        # print(results['img_shape'])
+         return results
+ 
+     def __repr__(self):
+@@ -1902,4 +2069,4 @@ class MelSpectrogram:
+                     f'step_size={self.step_size}, '
+                     f'n_mels={self.n_mels}, '
+                     f'fixed_length={self.fixed_length})')
+-        return repr_str
++        return repr_str
+\ No newline at end of file
+diff --git a/mmaction/datasets/pipelines/loading.py b/mmaction/datasets/pipelines/loading.py
+index 4843fcbe..fb4fd480 100644
+--- a/mmaction/datasets/pipelines/loading.py
++++ b/mmaction/datasets/pipelines/loading.py
+@@ -102,8 +102,8 @@ class SampleFrames:
+         test_mode (bool): Store True when building test or validation dataset.
+             Default: False.
+         start_index (None): This argument is deprecated and moved to dataset
+-            class (``BaseDataset``, ``VideoDatset``, ``RawframeDataset``, etc),
+-            see this: https://github.com/open-mmlab/mmaction2/pull/89.
++            class (``BaseDataset``, ``VideoDataset``, ``RawframeDataset``,
++            etc), see this: https://github.com/open-mmlab/mmaction2/pull/89.
+         keep_tail_frames (bool): Whether to keep tail frames when sampling.
+             Default: False.
+     """
+@@ -282,8 +282,8 @@ class UntrimmedSampleFrames:
+         frame_interval (int): Temporal interval of adjacent sampled frames.
+             Default: 16.
+         start_index (None): This argument is deprecated and moved to dataset
+-            class (``BaseDataset``, ``VideoDatset``, ``RawframeDataset``, etc),
+-            see this: https://github.com/open-mmlab/mmaction2/pull/89.
++            class (``BaseDataset``, ``VideoDataset``, ``RawframeDataset``,
++            etc), see this: https://github.com/open-mmlab/mmaction2/pull/89.
+     """
+ 
+     def __init__(self, clip_len=1, frame_interval=16, start_index=None):
+@@ -303,7 +303,9 @@ class UntrimmedSampleFrames:
+             results (dict): The resulting dict to be modified and passed
+                 to the next transform in pipeline.
+         """
++	### it does replicate padding otherwise (which maybe good for shorter video sequences, but the current pre-processing pipeline for X-model this replicate padding is not handled ---> rectify)
+         total_frames = results['total_frames']
++	# total_frames = self.clip_len*(results['total_frames']//self.clip_len)   #results['total_frames']
+         start_index = results['start_index']
+ 
+         clip_centers = np.arange(self.frame_interval // 2, total_frames,
+@@ -1847,4 +1849,4 @@ class LoadProposals:
+                     f'pgm_features_dir={self.pgm_features_dir}, '
+                     f'proposal_ext={self.proposal_ext}, '
+                     f'feature_ext={self.feature_ext})')
+-        return repr_str
++        return repr_str
+\ No newline at end of file
+diff --git a/tools/test.py b/tools/test.py
+index 6b52e9fd..d222f4e0 100644
+--- a/tools/test.py
++++ b/tools/test.py
+@@ -12,7 +12,7 @@ from mmcv.fileio.io import file_handlers
+ from mmcv.runner import get_dist_info, init_dist, load_checkpoint
+ from mmcv.runner.fp16_utils import wrap_fp16_model
+ 
+-from mmaction.datasets import build_dataloader, build_dataset
++from mmaction.datasets import build_dataloader, build_val_dataloader, build_dataset
+ from mmaction.models import build_model
+ from mmaction.utils import (build_ddp, build_dp, default_device,
+                             register_module_hooks, setup_multi_processes)
+@@ -344,7 +344,8 @@ def main():
+         shuffle=False)
+     dataloader_setting = dict(dataloader_setting,
+                               **cfg.data.get('test_dataloader', {}))
+-    data_loader = build_dataloader(dataset, **dataloader_setting)
++    # data_loader = build_dataloader(dataset, **dataloader_setting)
++    data_loader = build_val_dataloader(dataset, **dataloader_setting)
+ 
+     if args.tensorrt:
+         outputs = inference_tensorrt(args.checkpoint, distributed, data_loader,
+@@ -368,4 +369,4 @@ def main():
+ 
+ 
+ if __name__ == '__main__':
+-    main()
++    main()
+\ No newline at end of file

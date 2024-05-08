@@ -93,7 +93,7 @@ If you find the code and dataset useful, please cite this paper (and refer the d
 
 ## References
 
-We thank the following github repositories for the open source code and models:
+We thank the following github repositories for the relevant open source code and models:
 
 **[MMAction2](https://github.com/open-mmlab/mmaction2)**
 

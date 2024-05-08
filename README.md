@@ -62,6 +62,33 @@ mkdir models
 ## Data Pre-processing, Training, and Evaluation
 
 Run the python/bash scripts in the specified order (# --> Step-#___.py/.sh)
+```
+# Data Preparation
+python3 Step1_prepare_rawframes_dataset.py
+chmod +x Step2_run.sh
+bash Step2_run.sh
+python3 Step3_MOTdata_extract.py
+python3 Step4_associate_MOTdata_with_GT_IOtracks.py
+python3 Step5_create_MOTdata_with_GT_IOtracks.py
+
+# Train & Evaluate: Important Object Track Identification Model 
+python3 Step6_train_and_evaluate_Important_Object_Selector.py
+
+# Train & Evaluate: Ego-vehicle's Behavior Recognition Model 
+python3 Step7_prepare_rawframedata_annotationsfile.py
+chmod +x Step8_train_tsn_EgoVehicleBehaviorRecogizer.sh
+bash Step8_train_tsn_EgoVehicleBehaviorRecogizer.sh
+python3 Step9_evaluate_tsn_EgoVehicleBehaviorRecogizer.py
+
+# Data Preparation for Important Object Explanation Generator model
+python3 Step10_riskobj_mot_tracks_association_trainset.py
+python3 Step11_merged_atp_mot_tracks_trainset.py
+python3 Step12_prep_trackwise_headclass_explanations_data.py
+
+# Train & Evaluate: Important Object Explanation Prediction Model 
+python3 Step13_train_IOeXplanationsGeneratorModel.py
+python3 Step14_evaluate_IOeXplanationsGeneratorModel.py
+```
 
 The file paths for the pre-trained models (of a. ego-vehicle behavior recognition, b. IO eXplanation generator) specified in the scripts (Step13_train_IOeXplanationsGeneratorModel.py and Step14_evaluate_IOeXplanationsGeneratorModel.py) can be replaced with the best models obtained after running their respective training scripts.
 

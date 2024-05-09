@@ -2,7 +2,7 @@
 
 This repository is the official implementation of the approach proposed in [IDD-X: A Multi-View Dataset for Ego-relative Important Object Localization and Explanation in Dense and Unstructured Traffic](http://arxiv.org/abs/2404.08561). 
 
-Please visit [Project Page](https://idd-x.github.io/) for details.
+Please visit [Project Page](https://idd-x.github.io/) for details about the approach and the dataset.
 
 <!-- >📋  Optional: include a graphic explaining approach
  -->

@@ -10,7 +10,8 @@ Please visit [Project Page](https://idd-x.github.io/) for details about the appr
 ## Requirements
 
 To install requirements (on Python 3.10.5):
-(*Requirements of the dependent github repos can be installed as per their stated instructions.*)
+
+(Note: *Requirements of the dependent github repos can be installed as per their stated instructions.*)
 
 ```setup
 conda env create -f environment.yml

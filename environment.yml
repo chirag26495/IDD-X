@@ -1,4 +1,4 @@
-name: env2
+name: env_iddx
 channels:
 - pytorch
 - conda-forge
@@ -122,8 +122,8 @@ dependencies:
 - ncurses=6.3=h7f8727e_2
 - nest-asyncio=1.5.5=py310h06a4308_0
 - notebook=6.4.12=py310h06a4308_0
-- numpy=1.23.3=py310hd5efca6_0
-- numpy-base=1.23.3=py310h8e6c178_0
+- numpy=1.23.3
+- numpy-base=1.23.3
 - openssl=1.1.1q=h7f8727e_0
 - packaging=21.3=pyhd3eb1b0_0
 - pandocfilters=1.5.0=pyhd3eb1b0_0

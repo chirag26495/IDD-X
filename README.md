@@ -37,7 +37,7 @@ cd ..
 
 ## Download the dataset
 
-Use this [link](https://idd.insaan.iiit.ac.in/dataset/download/) to sign up and make the download request.
+Use this [link](https://cvit.iiit.ac.in/images/datasets/idd-x/iddx.tar.gz) to sign up and make the download request.
 
 Copy the downloaded dataset in this directory. Or, modify the relative data path in the respective scripts.
 

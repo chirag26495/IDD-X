@@ -37,7 +37,7 @@ cd ..
 
 ## Download the dataset
 
-Use this [link](https://cvit.iiit.ac.in/images/datasets/idd-x/iddx.tar.gz) to sign up and make the download request.
+Use this [link]([https://cvit.iiit.ac.in/images/datasets/idd-x/iddx.tar.gz](https://idd.insaan.iiit.ac.in/dataset/download/)) to sign up and make the download request.
 
 Copy the downloaded dataset in this directory. Or, modify the relative data path in the respective scripts.
 
@@ -47,7 +47,7 @@ Refer ./dataset_README.txt for details about the dataset and its structure.
 
 You can download the models trained on IDD-X here:
 
-[OneDriveLink](https://iiitaphyd-my.sharepoint.com/:f:/g/personal/chirag_parikh_research_iiit_ac_in/Evottwy5Q39JpDXBu7PvbngBOBPG5Xn4uC2FB3tffLJ7dA?e=hkXYJw) contains models for the tasks:
+[GDriveLink](https://drive.google.com/file/d/1QBR0fw9-UHcFVpUVMYVwwj88dKXIvTQ2/view?usp=sharing) contains models for the tasks:
 1. Important Object Track Identification
 2. Ego-Vehicle's Behavior Recognition
 3. Important Object Track Explanation
